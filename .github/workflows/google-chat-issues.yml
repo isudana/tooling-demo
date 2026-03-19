@@ -1,0 +1,163 @@
+name: Notify Google Chat on issue changes
+
+on:
+  issues:
+    types:
+      - opened
+      - closed
+      - reopened
+      - labeled
+      - unlabeled
+      - edited
+      - milestoned
+      - demilestoned
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Build Google Chat card payload
+        env:
+          ACTION: ${{ github.event.action }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_STATE: ${{ github.event.issue.state }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ACTOR: ${{ github.event.sender.login }}
+          MILESTONE: ${{ github.event.issue.milestone.title }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          case "$ACTION" in
+            opened)
+              EVENT_TITLE="🆕 Issue Opened"
+              EVENT_SUBTITLE="A new issue was created"
+              EXTRA_LABEL="Created"
+              EXTRA_VALUE="$ISSUE_STATE"
+              ;;
+            closed)
+              EVENT_TITLE="✅ Issue Closed"
+              EVENT_SUBTITLE="The issue was closed"
+              EXTRA_LABEL="State"
+              EXTRA_VALUE="$ISSUE_STATE"
+              ;;
+            reopened)
+              EVENT_TITLE="♻️ Issue Reopened"
+              EVENT_SUBTITLE="The issue was reopened"
+              EXTRA_LABEL="State"
+              EXTRA_VALUE="$ISSUE_STATE"
+              ;;
+            edited)
+              EVENT_TITLE="✏️ Issue Edited"
+              EVENT_SUBTITLE="Issue details were updated"
+              EXTRA_LABEL="State"
+              EXTRA_VALUE="$ISSUE_STATE"
+              ;;
+            labeled)
+              EVENT_TITLE="🏷️ Label Added"
+              EVENT_SUBTITLE="A label was added"
+              EXTRA_LABEL="Label"
+              EXTRA_VALUE="${LABEL:-N/A}"
+              ;;
+            unlabeled)
+              EVENT_TITLE="🏷️ Label Removed"
+              EVENT_SUBTITLE="A label was removed"
+              EXTRA_LABEL="Label"
+              EXTRA_VALUE="${LABEL:-N/A}"
+              ;;
+            milestoned)
+              EVENT_TITLE="🎯 Milestone Assigned"
+              EVENT_SUBTITLE="The issue was added to a milestone"
+              EXTRA_LABEL="Milestone"
+              EXTRA_VALUE="${MILESTONE:-None}"
+              ;;
+            demilestoned)
+              EVENT_TITLE="🎯 Milestone Removed"
+              EVENT_SUBTITLE="The issue was removed from its milestone"
+              EXTRA_LABEL="Milestone"
+              EXTRA_VALUE="${MILESTONE:-None}"
+              ;;
+            *)
+              EVENT_TITLE="📌 Issue Updated"
+              EVENT_SUBTITLE="An issue event occurred"
+              EXTRA_LABEL="State"
+              EXTRA_VALUE="$ISSUE_STATE"
+              ;;
+          esac
+
+          jq -n \
+            --arg event_title "$EVENT_TITLE" \
+            --arg event_subtitle "$EVENT_SUBTITLE" \
+            --arg repo "$REPO" \
+            --arg issue_number "$ISSUE_NUMBER" \
+            --arg issue_title "$ISSUE_TITLE" \
+            --arg issue_url "$ISSUE_URL" \
+            --arg actor "$ACTOR" \
+            --arg extra_label "$EXTRA_LABEL" \
+            --arg extra_value "$EXTRA_VALUE" \
+            '{
+              cardsV2: [
+                {
+                  cardId: "issue-update",
+                  card: {
+                    header: {
+                      title: $event_title,
+                      subtitle: ("Issue #" + $issue_number + " · " + $event_subtitle)
+                    },
+                    sections: [
+                      {
+                        widgets: [
+                          {
+                            textParagraph: {
+                              text: ("<b>" + $issue_title + "</b>")
+                            }
+                          },
+                          {
+                            decoratedText: {
+                              topLabel: "Repository",
+                              text: $repo
+                            }
+                          },
+                          {
+                            decoratedText: {
+                              topLabel: "Triggered by",
+                              text: $actor
+                            }
+                          },
+                          {
+                            decoratedText: {
+                              topLabel: $extra_label,
+                              text: $extra_value
+                            }
+                          },
+                          {
+                            buttonList: {
+                              buttons: [
+                                {
+                                  text: "Open Issue",
+                                  onClick: {
+                                    openLink: {
+                                      url: $issue_url
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }' > payload.json
+
+      - name: Send Google Chat card
+        env:
+          GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+        run: |
+          curl -X POST \
+            -H "Content-Type: application/json; charset=UTF-8" \
+            -d @payload.json \
+            "$GOOGLE_CHAT_WEBHOOK_URL"
